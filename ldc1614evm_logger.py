@@ -32,8 +32,8 @@ LDC1614_DEVICE_ID           = 0x7F
 
 # Debug controls
 DEBUG_PRINT_TX_DATA = False
-DEBUG_PRINT_RX_DATA = True
-DEBUG_PRINT_READ_DATA = True
+DEBUG_PRINT_RX_DATA = False
+DEBUG_PRINT_READ_DATA = False
 
 # Our LDC1614 settings
 SLEEP_MODE            = 0x2801
@@ -155,7 +155,8 @@ def main():
             tbl.row['unixtime'] = time.time()
             tbl.row['data_ch0'] = raw_ch0
             tbl.row.append()
-    
+            tbl.flush()
+
     # If we handled errors like KeyboardInterrupt properly, we'd get here:
     tbl.close()
     h5f.close()
