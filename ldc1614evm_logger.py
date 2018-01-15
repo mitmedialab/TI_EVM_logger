@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""
-Log inductive sensor data from TI's LDC1614 EVM.
+"""Log inductive sensor data from TI's LDC1614 EVM."""
 
-Date: 18 October 2017
-Author: Scott Johnston
-"""
+__author__ = 'Scott Johnston'
+__version__ = '0.0.2'
+__date__ = "15 January 2018"
 
 import serial, serial.tools.list_ports
 import crcmod.predefined
@@ -12,6 +11,7 @@ import binascii
 import struct
 import time
 import tables
+import argparse
 
 # LDC1614 register addresses (do not change)
 LDC1614_RCOUNT_CH0          = 0x08
@@ -129,7 +129,7 @@ def ldc_config(serial_port):
     # Put it back into normal operating mode
     write_reg(serial_port, LDC1614_CONFIG, CONFIG_SETTING)
 
-def main():
+def main(filename):
     # Identify LDC1614 EVM by USB VID/PID match
     detected_ports = list(serial.tools.list_ports.grep('2047:08F8'))
     if not detected_ports:
@@ -141,19 +141,25 @@ def main():
     device_id = read_reg(evm, LDC1614_DEVICE_ID)
     ldc_config(evm)
 
-    h5f = tables.open_file('ldc1614evm_output.h5', 'w')
-    description_name = {
-        'unixtime': tables.Time64Col(),
-        'data_ch0': tables.UInt32Col()
-    }
-    tbl = h5f.create_table('/', 'drift_data', description_name)
+    h5f = tables.open_file(filename, 'a', title="LDC1614EVM Logger Data")
 
+    try:
+        tbl = h5f.get_node('/drift_data')
+    except NoSuchNodeError:
+        table_definition = {
+            'unixtime': tables.Time64Col(),
+            'data_ch0': tables.UInt32Col(),
+            'data_ch1': tables.UInt32Col()
+        }
+        tbl = h5f.create_table('/', 'drift_data', description=table_definition, title='LDC1614 dataset')
+    
     start_stream(evm)
     while True:
         (raw_ch0, raw_ch1, raw_ch2, raw_ch3) = read_stream(evm)
         if raw_ch0 and not (raw_ch0 & 0xF0000000):
             tbl.row['unixtime'] = time.time()
             tbl.row['data_ch0'] = raw_ch0
+            print('Logging', raw_ch0)
             tbl.row.append()
             tbl.flush()
 
@@ -161,5 +167,9 @@ def main():
     tbl.close()
     h5f.close()
 
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('filename', nargs='?', help="Output file (HDF5 format)", default='data.h5')
+    args = parser.parse_args()
+
+    main(args.filename)
