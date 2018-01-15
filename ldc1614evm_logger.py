@@ -145,7 +145,7 @@ def main(filename):
 
     try:
         tbl = h5f.get_node('/drift_data')
-    except NoSuchNodeError:
+    except tables.NoSuchNodeError:
         table_definition = {
             'unixtime': tables.Time64Col(),
             'data_ch0': tables.UInt32Col(),
