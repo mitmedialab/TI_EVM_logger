@@ -37,12 +37,19 @@ DEBUG_PRINT_READ_DATA = False
 
 # Our LDC1614 settings
 SLEEP_MODE            = 0x2801
-RCOUNT_SETTING        = 0xFFFF      # Very conservative
-SETTLECOUNT_SETTING   = 0x1000      # Conservative, probably could be smaller
-CLOCK_DIVIDER_SETTING = 0x1001      # f_in = 1, f_ref = 1
 CONFIG_SETTING        = 0x1E01      # Ext clock, override R_p, disable auto amp
-MUX_CONFIG_SETTING    = 0x820C      # Continuously scan channels 0 and 1, 3.3 MHz deglitch
-DRIVE_CURRENT_SETTING = 0x6B40      # Magical value from GUI tool
+
+config_singlechannel = {
+    LDC1614_RCOUNT_CH0:         0xFFFF,
+    LDC1614_RCOUNT_CH1:         0x0004, # CH1 is set up in dummy mode here.
+    LDC1614_SETTLECOUNT_CH0:    0x8692,
+    LDC1614_SETTLECOUNT_CH1:    0x0001,
+    LDC1614_CLOCK_DIVIDERS_CH0: 0x1001,
+    LDC1614_CLOCK_DIVIDERS_CH1: 0x1001,
+    LDC1614_DRIVE_CURRENT_CH0:  0x4A40, # Idrive=9
+    LDC1614_DRIVE_CURRENT_CH1:  0x4A40, # Idrive=9
+    LDC1614_MUX_CONFIG:         0x820D  # Continuously scan channels 0 and 1, 10 MHz deglitch
+}
 
 def send_command(serial_port, command_bytes):
     crc8 = crcmod.predefined.mkCrcFun('crc-8')
@@ -113,19 +120,9 @@ def read_stream(serial_port):
 def ldc_config(serial_port):
     # Put the LDC1614 into sleep mode
     write_reg(serial_port, LDC1614_CONFIG, SLEEP_MODE)
-    # Set RCOUNT and settling count to configure conversion time
-    write_reg(serial_port, LDC1614_RCOUNT_CH0, RCOUNT_SETTING)
-    write_reg(serial_port, LDC1614_RCOUNT_CH1, RCOUNT_SETTING)
-    write_reg(serial_port, LDC1614_SETTLECOUNT_CH0, SETTLECOUNT_SETTING)
-    write_reg(serial_port, LDC1614_SETTLECOUNT_CH1, SETTLECOUNT_SETTING)
-    # Set clock dividers
-    write_reg(serial_port, LDC1614_CLOCK_DIVIDERS_CH0, CLOCK_DIVIDER_SETTING)
-    write_reg(serial_port, LDC1614_CLOCK_DIVIDERS_CH1, CLOCK_DIVIDER_SETTING)
-    # Set sensor current
-    write_reg(serial_port, LDC1614_DRIVE_CURRENT_CH0, DRIVE_CURRENT_SETTING)
-    write_reg(serial_port, LDC1614_DRIVE_CURRENT_CH1, DRIVE_CURRENT_SETTING)
-    # Set channels to scan
-    write_reg(serial_port, LDC1614_MUX_CONFIG, MUX_CONFIG_SETTING)
+    # Write channel configurations
+    for k,v in config_singlechannel.items():
+        write_reg(serial_port, k, v)
     # Put it back into normal operating mode
     write_reg(serial_port, LDC1614_CONFIG, CONFIG_SETTING)
 
@@ -144,26 +141,31 @@ def main(filename):
     h5f = tables.open_file(filename, 'a', title="LDC1614EVM Logger Data")
 
     try:
-        tbl = h5f.get_node('/drift_data')
+        tbl = h5f.get_node('/logdata')
+        print("Appending existing table in: {}".format(filename))
     except tables.NoSuchNodeError:
         table_definition = {
-            'unixtime': tables.Time64Col(),
+            'time_utc': tables.Time64Col(),
             'data_ch0': tables.UInt32Col(),
             'data_ch1': tables.UInt32Col()
         }
-        tbl = h5f.create_table('/', 'drift_data', description=table_definition, title='LDC1614 dataset')
+        tbl = h5f.create_table('/', 'logdata', description=table_definition, title='LDC1614 dataset')
+        print("Created new table in: {}".format(filename))
+
     
     start_stream(evm)
+    print("Beginning logging...")
     while True:
         (raw_ch0, raw_ch1, raw_ch2, raw_ch3) = read_stream(evm)
         if raw_ch0 and not (raw_ch0 & 0xF0000000):
-            tbl.row['unixtime'] = time.time()
+            tbl.row['time_utc'] = time.time()
             tbl.row['data_ch0'] = raw_ch0
-            print('Logging', raw_ch0)
+            tbl.row['data_ch1'] = raw_ch1
             tbl.row.append()
             tbl.flush()
 
     # If we handled errors like KeyboardInterrupt properly, we'd get here:
+    print("Cleaning up...")
     tbl.close()
     h5f.close()
 
