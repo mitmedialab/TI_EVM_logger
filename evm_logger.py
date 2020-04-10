@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Log inductive sensor data from TI's LDC1614 EVM."""
+"""Log inductive sensor data from TI's EVM boards (tested with FDC2214 and LDC1614)."""
 
 __author__ = 'Scott Johnston'
 __version__ = '0.0.2'
@@ -12,43 +12,44 @@ import struct
 import time
 import tables
 import argparse
+import math
 
-# LDC1614 register addresses (do not change)
-LDC1614_RCOUNT_CH0          = 0x08
-LDC1614_RCOUNT_CH1          = 0x09
-LDC1614_SETTLECOUNT_CH0     = 0x10
-LDC1614_SETTLECOUNT_CH1     = 0x11
-LDC1614_CLOCK_DIVIDERS_CH0  = 0x14
-LDC1614_CLOCK_DIVIDERS_CH1  = 0x15
-LDC1614_STATUS              = 0x18
-LDC1614_ERROR_CONFIG        = 0x19
-LDC1614_CONFIG              = 0x1A
-LDC1614_MUX_CONFIG          = 0x1B
-LDC1614_RESET_DEV           = 0x1C
-LDC1614_DRIVE_CURRENT_CH0   = 0x1E
-LDC1614_DRIVE_CURRENT_CH1   = 0x1F
-LDC1614_MANUFACTURER_ID     = 0x7E
-LDC1614_DEVICE_ID           = 0x7F
+# register addresses (do not change)
+EVM_RCOUNT_CH0          = 0x08
+EVM_RCOUNT_CH1          = 0x09
+EVM_SETTLECOUNT_CH0     = 0x10
+EVM_SETTLECOUNT_CH1     = 0x11
+EVM_CLOCK_DIVIDERS_CH0  = 0x14
+EVM_CLOCK_DIVIDERS_CH1  = 0x15
+EVM_STATUS              = 0x18
+EVM_ERROR_CONFIG        = 0x19
+EVM_CONFIG              = 0x1A
+EVM_MUX_CONFIG          = 0x1B
+EVM_RESET_DEV           = 0x1C
+EVM_DRIVE_CURRENT_CH0   = 0x1E
+EVM_DRIVE_CURRENT_CH1   = 0x1F
+EVM_MANUFACTURER_ID     = 0x7E
+EVM_DEVICE_ID           = 0x7F
 
 # Debug controls
 DEBUG_PRINT_TX_DATA = False
 DEBUG_PRINT_RX_DATA = False
 DEBUG_PRINT_READ_DATA = False
 
-# Our LDC1614 settings
+# Our settings
 SLEEP_MODE            = 0x2801
 CONFIG_SETTING        = 0x1E01      # Ext clock, override R_p, disable auto amp
 
 config_singlechannel = {
-    LDC1614_RCOUNT_CH0:         0xFFFF,
-    LDC1614_RCOUNT_CH1:         0x0004, # CH1 is set up in dummy mode here.
-    LDC1614_SETTLECOUNT_CH0:    0x8692,
-    LDC1614_SETTLECOUNT_CH1:    0x0001,
-    LDC1614_CLOCK_DIVIDERS_CH0: 0x1001,
-    LDC1614_CLOCK_DIVIDERS_CH1: 0x1001,
-    LDC1614_DRIVE_CURRENT_CH0:  0x4A40, # Idrive=9
-    LDC1614_DRIVE_CURRENT_CH1:  0x4A40, # Idrive=9
-    LDC1614_MUX_CONFIG:         0x820D  # Continuously scan channels 0 and 1, 10 MHz deglitch
+    EVM_RCOUNT_CH0:         0xFFFF,
+    EVM_RCOUNT_CH1:         0x0004, # CH1 is set up in dummy mode here.
+    EVM_SETTLECOUNT_CH0:    0x8692,
+    EVM_SETTLECOUNT_CH1:    0x0001,
+    EVM_CLOCK_DIVIDERS_CH0: 0x1001,
+    EVM_CLOCK_DIVIDERS_CH1: 0x1001,
+    EVM_DRIVE_CURRENT_CH0:  0x4A40, # Idrive=9
+    EVM_DRIVE_CURRENT_CH1:  0x4A40, # Idrive=9
+    EVM_MUX_CONFIG:         0x820D  # Continuously scan channels 0 and 1, 10 MHz deglitch
 }
 
 def send_command(serial_port, command_bytes):
@@ -118,17 +119,17 @@ def read_stream(serial_port):
         #raise RuntimeError('4- Uh-oh, command returned an error.')
     return raw_ch0, raw_ch1, raw_ch2, raw_ch3
 
-def ldc_config(serial_port):
-    # Put the LDC1614 into sleep mode
-    write_reg(serial_port, LDC1614_CONFIG, SLEEP_MODE)
+def evm_config(serial_port):
+    # Put the EVM into sleep mode
+    write_reg(serial_port, EVM_CONFIG, SLEEP_MODE)
     # Write channel configurations
     for k,v in config_singlechannel.items():
         write_reg(serial_port, k, v)
     # Put it back into normal operating mode
-    write_reg(serial_port, LDC1614_CONFIG, CONFIG_SETTING)
+    write_reg(serial_port, EVM_CONFIG, CONFIG_SETTING)
 
 def main(filename):
-    # Identify LDC1614 EVM by USB VID/PID match
+    # Identify EVM by USB VID/PID match
     detected_ports = list(serial.tools.list_ports.grep('2047:08F8'))
     if not detected_ports:
         raise RuntimeError('No EVM found.')
@@ -136,10 +137,10 @@ def main(filename):
         # open the serial device.
         evm = serial.Serial(detected_ports[0].device, 115200, timeout=1)
 
-    device_id = read_reg(evm, LDC1614_DEVICE_ID)
-    ldc_config(evm)
+    device_id = read_reg(evm, EVM_DEVICE_ID)
+    evm_config(evm)
 
-    h5f = tables.open_file(filename, 'a', title="LDC1614EVM Logger Data")
+    h5f = tables.open_file(filename, 'a', title="EVM Logger Data")
 
     try:
         tbl = h5f.get_node('/logdata')
@@ -150,12 +151,16 @@ def main(filename):
             'data_ch0': tables.UInt32Col(),
             'data_ch1': tables.UInt32Col()
         }
-        tbl = h5f.create_table('/', 'logdata', description=table_definition, title='LDC1614 dataset')
+        tbl = h5f.create_table('/', 'logdata', description=table_definition, title='EVM dataset')
         print("Created new table in: {}".format(filename))
 
 
+    min_raw = float('inf')
+    max_raw = float('-inf')
+
     start_stream(evm)
     print("Beginning logging...")
+
     while True:
         try:
             (raw_ch0, raw_ch1, raw_ch2, raw_ch3) = read_stream(evm)
@@ -165,8 +170,24 @@ def main(filename):
                 tbl.row['data_ch1'] = raw_ch1
                 tbl.row.append()
                 tbl.flush()
+
+                if raw_ch0 > max_raw:
+                    max_raw = raw_ch0
+                if raw_ch0 < min_raw:
+                    min_raw = raw_ch0
+
+                range_raw = max_raw - min_raw
+                if range_raw != 0:
+                    percentage = 100 * (raw_ch0 - min_raw) / range_raw
+                    print(percentage, '\t', int(percentage/2) * 'x')
+                else:
+                    print('Calibration needed:\t', min_raw,
+                                             '\t', raw_ch0,
+                                             '\t', max_raw-min_raw,
+                                             '\t', raw_ch0-min_raw)
         except:
-            print("!")
+            print('Exception!')
+            break
 
     # If we handled errors like KeyboardInterrupt properly, we'd get here:
     print("Cleaning up...")
