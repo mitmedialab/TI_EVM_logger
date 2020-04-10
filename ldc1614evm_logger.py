@@ -64,7 +64,7 @@ def send_command(serial_port, command_bytes):
         print("< " + ":".join("{:02x}".format(c) for c in response_bytes))
     (error_code, register_value) = struct.unpack('>3xB2xH24x', response_bytes)
     if error_code:
-        raise RuntimeError('Uh-oh, command returned an error.')
+        raise RuntimeError('1- Uh-oh, command returned an error.')
     return register_value
 
 def write_reg(serial_port, addr, data):
@@ -92,7 +92,7 @@ def start_stream(serial_port):
         print("< " + ":".join("{:02x}".format(c) for c in response_bytes))
     error_code = struct.unpack('>3xB28x', response_bytes)[0]
     if error_code:
-        raise RuntimeError('Uh-oh, command returned an error.')
+        raise RuntimeError('2- Uh-oh, command returned an error.')
     return
 
 def stop_stream(serial_port):
@@ -105,7 +105,7 @@ def stop_stream(serial_port):
         print("< " + ":".join("{:02x}".format(c) for c in response_bytes))
     error_code = struct.unpack('>3xB28x', response_bytes)[0]
     if error_code:
-        raise RuntimeError('Uh-oh, command returned an error.')
+        raise RuntimeError('3- Uh-oh, command returned an error.')
     return
 
 def read_stream(serial_port):
@@ -114,7 +114,7 @@ def read_stream(serial_port):
         print("< " + ":".join("{:02x}".format(c) for c in stream_bytes))
     (error_code, raw_ch0, raw_ch1, raw_ch2, raw_ch3) = struct.unpack('>3xB2xLLLL10x', stream_bytes)
     if error_code:
-        raise RuntimeError('Uh-oh, command returned an error.')
+        raise RuntimeError('4- Uh-oh, command returned an error.')
     return raw_ch0, raw_ch1, raw_ch2, raw_ch3
 
 def ldc_config(serial_port):
