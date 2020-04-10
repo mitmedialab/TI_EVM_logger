@@ -114,7 +114,8 @@ def read_stream(serial_port):
         print("< " + ":".join("{:02x}".format(c) for c in stream_bytes))
     (error_code, raw_ch0, raw_ch1, raw_ch2, raw_ch3) = struct.unpack('>3xB2xLLLL10x', stream_bytes)
     if error_code:
-        raise RuntimeError('4- Uh-oh, command returned an error.')
+        print('4- Uh-oh, command returned an error.')
+        #raise RuntimeError('4- Uh-oh, command returned an error.')
     return raw_ch0, raw_ch1, raw_ch2, raw_ch3
 
 def ldc_config(serial_port):
@@ -152,17 +153,20 @@ def main(filename):
         tbl = h5f.create_table('/', 'logdata', description=table_definition, title='LDC1614 dataset')
         print("Created new table in: {}".format(filename))
 
-    
+
     start_stream(evm)
     print("Beginning logging...")
     while True:
-        (raw_ch0, raw_ch1, raw_ch2, raw_ch3) = read_stream(evm)
-        if raw_ch0 and not (raw_ch0 & 0xF0000000):
-            tbl.row['time_utc'] = time.time()
-            tbl.row['data_ch0'] = raw_ch0
-            tbl.row['data_ch1'] = raw_ch1
-            tbl.row.append()
-            tbl.flush()
+        try:
+            (raw_ch0, raw_ch1, raw_ch2, raw_ch3) = read_stream(evm)
+            if raw_ch0 and not (raw_ch0 & 0xF0000000):
+                tbl.row['time_utc'] = time.time()
+                tbl.row['data_ch0'] = raw_ch0
+                tbl.row['data_ch1'] = raw_ch1
+                tbl.row.append()
+                tbl.flush()
+        except:
+            print("!")
 
     # If we handled errors like KeyboardInterrupt properly, we'd get here:
     print("Cleaning up...")
