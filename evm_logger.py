@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Log inductive sensor data from TI's EVM boards (tested with FDC2214 and LDC1614)."""
 
-__author__ = 'Scott Johnston'
-__version__ = '0.0.2'
-__date__ = "15 January 2018"
+host = "127.0.0.1"
+port = 8080
+
+filename = "data.h5"
 
 import serial, serial.tools.list_ports
 import crcmod.predefined
@@ -13,6 +14,8 @@ import time
 import tables
 import argparse
 import math
+import asyncio
+import websockets
 
 # register addresses (do not change)
 EVM_RCOUNT_CH0          = 0x08
@@ -128,7 +131,9 @@ def evm_config(serial_port):
     # Put it back into normal operating mode
     write_reg(serial_port, EVM_CONFIG, CONFIG_SETTING)
 
-def main(filename):
+async def main(websocket, path):
+    filename="data.h5" #default
+
     # Identify EVM by USB VID/PID match
     detected_ports = list(serial.tools.list_ports.grep('2047:08F8'))
     if not detected_ports:
@@ -162,6 +167,7 @@ def main(filename):
     print("Beginning logging...")
 
     while True:
+        percentage = 0
         try:
             (raw_ch0, raw_ch1, raw_ch2, raw_ch3) = read_stream(evm)
             if raw_ch0 and not (raw_ch0 & 0xF0000000):
@@ -178,13 +184,16 @@ def main(filename):
 
                 range_raw = max_raw - min_raw
                 if range_raw != 0:
-                    percentage = 100 * (raw_ch0 - min_raw) / range_raw
+                    percentage = round(100 * (raw_ch0 - min_raw) / range_raw, 2)
                     print(percentage, '\t', int(percentage/2) * 'x')
                 else:
                     print('Calibration needed:\t', min_raw,
                                              '\t', raw_ch0,
                                              '\t', max_raw-min_raw,
                                              '\t', raw_ch0-min_raw)
+            await websocket.send(str(percentage))
+            # await asyncio.sleep(1/25.0)
+
         except:
             print('Exception!')
             break
@@ -195,8 +204,10 @@ def main(filename):
     h5f.close()
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('filename', nargs='?', help="Output file (HDF5 format)", default='data.h5')
-    args = parser.parse_args()
+    print('starting')
+    start_server = websockets.serve(main, host, port)
+    print('server OK')
+    asyncio.get_event_loop().run_until_complete(start_server)
+    print('loop OK')
+    asyncio.get_event_loop().run_forever()
 
-    main(args.filename)
