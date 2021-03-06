@@ -20,10 +20,16 @@ import websockets
 # register addresses (do not change)
 EVM_RCOUNT_CH0          = 0x08
 EVM_RCOUNT_CH1          = 0x09
+EVM_RCOUNT_CH2          = 0x0a
+EVM_RCOUNT_CH3          = 0x0b
 EVM_SETTLECOUNT_CH0     = 0x10
 EVM_SETTLECOUNT_CH1     = 0x11
+EVM_SETTLECOUNT_CH2     = 0x12
+EVM_SETTLECOUNT_CH3     = 0x13
 EVM_CLOCK_DIVIDERS_CH0  = 0x14
 EVM_CLOCK_DIVIDERS_CH1  = 0x15
+EVM_CLOCK_DIVIDERS_CH2  = 0x16
+EVM_CLOCK_DIVIDERS_CH3  = 0x17
 EVM_STATUS              = 0x18
 EVM_ERROR_CONFIG        = 0x19
 EVM_CONFIG              = 0x1A
@@ -31,6 +37,8 @@ EVM_MUX_CONFIG          = 0x1B
 EVM_RESET_DEV           = 0x1C
 EVM_DRIVE_CURRENT_CH0   = 0x1E
 EVM_DRIVE_CURRENT_CH1   = 0x1F
+EVM_DRIVE_CURRENT_CH2   = 0x20
+EVM_DRIVE_CURRENT_CH3   = 0x21
 EVM_MANUFACTURER_ID     = 0x7E
 EVM_DEVICE_ID           = 0x7F
 
@@ -43,16 +51,29 @@ DEBUG_PRINT_READ_DATA = False
 SLEEP_MODE            = 0x2801
 CONFIG_SETTING        = 0x1E01      # Ext clock, override R_p, disable auto amp
 
-config_singlechannel = {
-    EVM_RCOUNT_CH0:         0xFFFF,
-    EVM_RCOUNT_CH1:         0x0004, # CH1 is set up in dummy mode here.
-    EVM_SETTLECOUNT_CH0:    0x8692,
+config_multichannel = {
+    EVM_RCOUNT_CH0:         0xFFFF, # TODO: tune these if noise pbs occur!
+    EVM_RCOUNT_CH1:         0xFFFF,
+    EVM_RCOUNT_CH2:         0xFFFF,
+    EVM_RCOUNT_CH3:         0xFFFF,
+    EVM_SETTLECOUNT_CH0:    0x0001,
     EVM_SETTLECOUNT_CH1:    0x0001,
+    EVM_SETTLECOUNT_CH2:    0x0001,
+    EVM_SETTLECOUNT_CH3:    0x0001,
     EVM_CLOCK_DIVIDERS_CH0: 0x1001,
     EVM_CLOCK_DIVIDERS_CH1: 0x1001,
-    EVM_DRIVE_CURRENT_CH0:  0x4A40, # Idrive=9
-    EVM_DRIVE_CURRENT_CH1:  0x4A40, # Idrive=9
-    EVM_MUX_CONFIG:         0x820D  # Continuously scan channels 0 and 1, 10 MHz deglitch
+    EVM_CLOCK_DIVIDERS_CH2: 0x1001,
+    EVM_CLOCK_DIVIDERS_CH3: 0x1001,
+    EVM_DRIVE_CURRENT_CH0:  0xF800, # TODO: measure oscillation amplitude on an
+    EVM_DRIVE_CURRENT_CH1:  0xF800, # oscilloscope and adjust this IDRIVE value
+    EVM_DRIVE_CURRENT_CH2:  0xF800, # See p42 of datasheet
+    EVM_DRIVE_CURRENT_CH3:  0xF800,
+    EVM_MUX_CONFIG:         0xC20D  # Continuously scan channels 0 to 3, 10 MHz deglitch
+#bit: 1 1 1 1   1 1 0 0    0 0 0 0   0 0 0 0
+#     5 4 3 2   1 0 9 8    7 6 5 4   3 2 1 0
+#
+#bin: 1 1 0 0   0 0 1 0    0 0 0 0   1 1 0 1
+#hex:    C         2          0          D
 }
 
 def send_command(serial_port, command_bytes):
@@ -120,20 +141,18 @@ def read_stream(serial_port):
     if error_code:
         print('4- Uh-oh, command returned an error.')
         #raise RuntimeError('4- Uh-oh, command returned an error.')
-    return raw_ch0, raw_ch1, raw_ch2, raw_ch3
+    return [raw_ch0, raw_ch1, raw_ch2, raw_ch3]
 
 def evm_config(serial_port):
     # Put the EVM into sleep mode
     write_reg(serial_port, EVM_CONFIG, SLEEP_MODE)
     # Write channel configurations
-    for k,v in config_singlechannel.items():
+    for k,v in config_multichannel.items():
         write_reg(serial_port, k, v)
     # Put it back into normal operating mode
     write_reg(serial_port, EVM_CONFIG, CONFIG_SETTING)
 
 async def main(websocket, path):
-    filename="data.h5" #default
-
     # Identify EVM by USB VID/PID match
     detected_ports = list(serial.tools.list_ports.grep('2047:08F8'))
     if not detected_ports:
@@ -154,48 +173,69 @@ async def main(websocket, path):
         table_definition = {
             'time_utc': tables.Time64Col(),
             'data_ch0': tables.UInt32Col(),
-            'data_ch1': tables.UInt32Col()
+            'data_ch1': tables.UInt32Col(),
+            'data_ch2': tables.UInt32Col(),
+            'data_ch3': tables.UInt32Col()
         }
         tbl = h5f.create_table('/', 'logdata', description=table_definition, title='EVM dataset')
         print("Created new table in: {}".format(filename))
 
 
-    min_raw = float('inf')
-    max_raw = float('-inf')
-
     start_stream(evm)
     print("Beginning logging...")
 
+    # default values:
+    min_def = float(' inf')
+    max_def = float('-inf')
+    max_ = [max_def, max_def, max_def, max_def]
+    min_ = [min_def, min_def, min_def, min_def]
+    ch_num = 4
+
+    ms = time.time()*1000.0
+
     while True:
-        percentage = 0
         try:
-            (raw_ch0, raw_ch1, raw_ch2, raw_ch3) = read_stream(evm)
-            if raw_ch0 and not (raw_ch0 & 0xF0000000):
+            raw_ = read_stream(evm) # get array of 4 measurements
+            socket_buff = ""
+
+            for i in range(ch_num):
                 tbl.row['time_utc'] = time.time()
-                tbl.row['data_ch0'] = raw_ch0
-                tbl.row['data_ch1'] = raw_ch1
+
+                if raw_[i] and not (raw_[i] & 0xF0000000):
+                    tbl.row['data_ch'+str(i)] = raw_[i]
+
+                    # adaptive calibration:
+                    if raw_[i] > max_[i]: max_[i] = raw_[i]
+                    if raw_[i] < min_[i]: min_[i] = raw_[i]
+
+                    # remove calibration offset
+                    calibrated = raw_[i] - min_[i]
+                    range_ = max_[i] - min_[i]
+
+                    if range_ != 0:
+                        percentage = round(100 * calibrated / range_, 1)
+                        separator = (',' if (i < ch_num-1) else '')
+                        socket_buff += str(percentage) + separator
+                        print(str(i) + ' ' + str(percentage) +
+                              (3*i+1)*'\t' + int(percentage/8) * 'x')
+                    else:
+                        print('Calib needed:\t', min_[i],
+                                           '\t', raw_[i],
+                                           '\t', max_[i],
+                                           '\t', calibrated,
+                                           '\t', range_)
+                        socket_buff = ""
+                        break
                 tbl.row.append()
                 tbl.flush()
 
-                if raw_ch0 > max_raw:
-                    max_raw = raw_ch0
-                if raw_ch0 < min_raw:
-                    min_raw = raw_ch0
+            await websocket.send(socket_buff)
+            print('time dif: ' + str(round(time.time()*1000.0 - ms, 2)) + '\n')
+            ms = time.time()*1000.0
 
-                range_raw = max_raw - min_raw
-                if range_raw != 0:
-                    percentage = round(100 * (raw_ch0 - min_raw) / range_raw, 2)
-                    print(percentage, '\t', int(percentage/2) * 'x')
-                else:
-                    print('Calibration needed:\t', min_raw,
-                                             '\t', raw_ch0,
-                                             '\t', max_raw-min_raw,
-                                             '\t', raw_ch0-min_raw)
-            await websocket.send(str(percentage))
-            # await asyncio.sleep(1/25.0)
-
-        except:
-            print('Exception!')
+        except Exception as e:
+            print('\n  !!! Exception:')
+            print(e)
             break
 
     # If we handled errors like KeyboardInterrupt properly, we'd get here:
@@ -204,10 +244,8 @@ async def main(websocket, path):
     h5f.close()
 
 if __name__ == '__main__':
-    print('starting')
     start_server = websockets.serve(main, host, port)
-    print('server OK')
     asyncio.get_event_loop().run_until_complete(start_server)
-    print('loop OK')
+    print('Server running: start the listener and calibrate your sensor!')
     asyncio.get_event_loop().run_forever()
 
