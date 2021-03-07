@@ -18,9 +18,14 @@ It works with the following EVM boards:
 
 ## How?
 
-Just execute the python script:
+Start the python script (with websocket server):
 
     ./evm_logger.py
+
+...then start your websocket client. This example visualizes the 4 sensor values:
+
+https://editor.p5js.org/CedHon/sketches/4pFRCAyIQ
+
 
 Note: you might need to tune some of register parameters for your own application, see `config_multichannel` and your favorite datasheet...
 
