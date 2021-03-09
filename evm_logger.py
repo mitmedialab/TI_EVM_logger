@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Log inductive sensor data from TI's EVM boards (tested with FDC2214 and LDC1614)."""
 
+# this flag enables testing without the hardware (with fake data):
+SIMULATION = False
+
 host = "127.0.0.1"
 port = 8080
 
@@ -156,82 +159,101 @@ async def main(websocket, path):
     # Identify EVM by USB VID/PID match
     detected_ports = list(serial.tools.list_ports.grep('2047:08F8'))
     if not detected_ports:
-        raise RuntimeError('No EVM found.')
+        print('No EVM found - switching to simulation.')
+        SIMULATION = True
     else:
         # open the serial device.
         evm = serial.Serial(detected_ports[0].device, 115200, timeout=1)
 
-    device_id = read_reg(evm, EVM_DEVICE_ID)
-    evm_config(evm)
+    if SIMULATION:
+        raw_ = [0, 0, 0, 0]
+    else:
+        device_id = read_reg(evm, EVM_DEVICE_ID)
+        evm_config(evm)
 
-    h5f = tables.open_file(filename, 'a', title="EVM Logger Data")
+        h5f = tables.open_file(filename, 'a', title="EVM Logger Data")
 
-    try:
-        tbl = h5f.get_node('/logdata')
-        print("Appending existing table in: {}".format(filename))
-    except tables.NoSuchNodeError:
-        table_definition = {
-            'time_utc': tables.Time64Col(),
-            'data_ch0': tables.UInt32Col(),
-            'data_ch1': tables.UInt32Col(),
-            'data_ch2': tables.UInt32Col(),
-            'data_ch3': tables.UInt32Col()
-        }
-        tbl = h5f.create_table('/', 'logdata', description=table_definition, title='EVM dataset')
-        print("Created new table in: {}".format(filename))
+        try:
+            tbl = h5f.get_node('/logdata')
+            print("Appending existing table in: {}".format(filename))
+        except tables.NoSuchNodeError:
+            table_definition = {
+                'time_utc': tables.Time64Col(),
+                'data_ch0': tables.UInt32Col(),
+                'data_ch1': tables.UInt32Col(),
+                'data_ch2': tables.UInt32Col(),
+                'data_ch3': tables.UInt32Col()
+            }
+            tbl = h5f.create_table('/', 'logdata', description=table_definition, title='EVM dataset')
+            print("Created new table in: {}".format(filename))
 
+        start_stream(evm)
+        print("Beginning logging...")
 
-    start_stream(evm)
-    print("Beginning logging...")
+        # default values:
+        min_def = float(' inf')
+        max_def = float('-inf')
+        max_ = [max_def, max_def, max_def, max_def]
+        min_ = [min_def, min_def, min_def, min_def]
+        ms = time.time()*1000.0
 
-    # default values:
-    min_def = float(' inf')
-    max_def = float('-inf')
-    max_ = [max_def, max_def, max_def, max_def]
-    min_ = [min_def, min_def, min_def, min_def]
     ch_num = 4
-
-    ms = time.time()*1000.0
 
     while True:
         try:
-            raw_ = read_stream(evm) # get array of 4 measurements
+
+            if SIMULATION:
+                for i in range(4):
+                    # simulate some sensor values
+                    raw_[i] = raw_[i] + 0.5*(2*i+1) if raw_[i] < 100 else 0
+            else:
+                raw_ = read_stream(evm) # get array of 4 measurements
+
             socket_buff = ""
 
             for i in range(ch_num):
-                tbl.row['time_utc'] = time.time()
 
-                if raw_[i] and not (raw_[i] & 0xF0000000):
-                    tbl.row['data_ch'+str(i)] = raw_[i]
+                if SIMULATION:
+                    separator = (',' if (i < ch_num-1) else '')
+                    socket_buff += str(raw_[i]) + separator
+                else:
+                    tbl.row['time_utc'] = time.time()
 
-                    # adaptive calibration:
-                    if raw_[i] > max_[i]: max_[i] = raw_[i]
-                    if raw_[i] < min_[i]: min_[i] = raw_[i]
+                    if raw_[i] and not (raw_[i] & 0xF0000000):
+                        tbl.row['data_ch'+str(i)] = raw_[i]
 
-                    # remove calibration offset
-                    calibrated = raw_[i] - min_[i]
-                    range_ = max_[i] - min_[i]
+                        # adaptive calibration:
+                        if raw_[i] > max_[i]: max_[i] = raw_[i]
+                        if raw_[i] < min_[i]: min_[i] = raw_[i]
 
-                    if range_ != 0:
-                        percentage = round(100 * calibrated / range_, 1)
-                        separator = (',' if (i < ch_num-1) else '')
-                        socket_buff += str(percentage) + separator
-                        print(str(i) + ' ' + str(percentage) +
-                              (3*i+1)*'\t' + int(percentage/8) * 'x')
-                    else:
-                        print('Calib needed:\t', min_[i],
-                                           '\t', raw_[i],
-                                           '\t', max_[i],
-                                           '\t', calibrated,
-                                           '\t', range_)
-                        socket_buff = ""
-                        break
+                        # remove calibration offset
+                        calibrated = raw_[i] - min_[i]
+                        range_ = max_[i] - min_[i]
+
+                        if range_ != 0:
+                            percentage = round(100 * calibrated / range_, 1)
+                            separator = (',' if (i < ch_num-1) else '')
+                            socket_buff += str(percentage) + separator
+                            print(str(i) + ' ' + str(percentage) +
+                                  (3*i+1)*'\t' + int(percentage/8) * 'x')
+                        else:
+                            print('Calib needed:\t', min_[i],
+                                               '\t', raw_[i],
+                                               '\t', max_[i],
+                                               '\t', calibrated,
+                                               '\t', range_)
+                            socket_buff = ""
+                            break
+
+            if SIMULATION:
+                await asyncio.sleep(0.02) # 20ms
+            else:
+                print('time dif: ' + str(round(time.time()*1000.0 - ms, 2)) + '\n')
+                ms = time.time()*1000.0
                 tbl.row.append()
                 tbl.flush()
 
             await websocket.send(socket_buff)
-            print('time dif: ' + str(round(time.time()*1000.0 - ms, 2)) + '\n')
-            ms = time.time()*1000.0
 
         except Exception as e:
             print('\n  !!! Exception:')
@@ -239,9 +261,10 @@ async def main(websocket, path):
             break
 
     # If we handled errors like KeyboardInterrupt properly, we'd get here:
-    print("Cleaning up...")
-    tbl.close()
-    h5f.close()
+    if not SIMULATION:
+        print("Cleaning up...")
+        tbl.close()
+        h5f.close()
 
 if __name__ == '__main__':
     start_server = websockets.serve(main, host, port)
