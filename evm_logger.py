@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
 """Log inductive sensor data from TI's EVM boards (tested with FDC2214 and LDC1614)."""
 
-# this flag enables testing without the hardware (with fake data):
-SIMULATION = False
-
 host = "127.0.0.1"
 port = 8080
 
 filename = "data.h5"
+smoothing_factor = 0.5
 
 import serial, serial.tools.list_ports
 import crcmod.predefined
@@ -156,6 +154,9 @@ def evm_config(serial_port):
     write_reg(serial_port, EVM_CONFIG, CONFIG_SETTING)
 
 async def main(websocket, path):
+    # this flag enables testing without the hardware (with fake data):
+    SIMULATION = False
+
     # Identify EVM by USB VID/PID match
     detected_ports = list(serial.tools.list_ports.grep('2047:08F8'))
     if not detected_ports:
@@ -165,6 +166,7 @@ async def main(websocket, path):
         # open the serial device.
         evm = serial.Serial(detected_ports[0].device, 115200, timeout=1)
 
+    smoothed = [0, 0, 0, 0]
     if SIMULATION:
         raw_ = [0, 0, 0, 0]
     else:
@@ -175,7 +177,6 @@ async def main(websocket, path):
 
         try:
             tbl = h5f.get_node('/logdata')
-            print("Appending existing table in: {}".format(filename))
         except tables.NoSuchNodeError:
             table_definition = {
                 'time_utc': tables.Time64Col(),
@@ -188,14 +189,12 @@ async def main(websocket, path):
             print("Created new table in: {}".format(filename))
 
         start_stream(evm)
-        print("Beginning logging...")
 
         # default values:
         min_def = float(' inf')
         max_def = float('-inf')
         max_ = [max_def, max_def, max_def, max_def]
         min_ = [min_def, min_def, min_def, min_def]
-        ms = time.time()*1000.0
 
     ch_num = 4
 
@@ -231,28 +230,32 @@ async def main(websocket, path):
                         range_ = max_[i] - min_[i]
 
                         if range_ != 0:
-                            percentage = round(100 * calibrated / range_, 1)
+                            raw_percentage = 100 * calibrated / range_
+                            smoothed[i] = round(smoothed[i] * smoothing_factor + \
+                                          raw_percentage * (1 - smoothing_factor), 1)
                             separator = (',' if (i < ch_num-1) else '')
-                            socket_buff += str(percentage) + separator
-                            print(str(i) + ' ' + str(percentage) +
-                                  (3*i+1)*'\t' + int(percentage/8) * 'x')
+
+                            socket_buff += str(smoothed[i]) + separator
+                           #print(str(i) + ' ' + str(raw_percentage) +
+                           #      (3*i+1)*'\t' + int(raw_percentage/8) * 'x')
                         else:
-                            print('Calib needed:\t', min_[i],
-                                               '\t', raw_[i],
-                                               '\t', max_[i],
-                                               '\t', calibrated,
-                                               '\t', range_)
+                           #print('Calib needed:\t', min_[i],
+                           #                   '\t', raw_[i],
+                           #                   '\t', max_[i],
+                           #                   '\t', calibrated,
+                           #                   '\t', range_)
                             socket_buff = ""
                             break
 
             if SIMULATION:
-                await asyncio.sleep(0.02) # 20ms
+                await asyncio.sleep(0.01) # 10ms
             else:
-                print('time dif: ' + str(round(time.time()*1000.0 - ms, 2)) + '\n')
-                ms = time.time()*1000.0
+                #print('time dif: ' + str(round(time.time()*1000.0 - ms, 2)) + '\n')
+                #ms = time.time()*1000.0
                 tbl.row.append()
                 tbl.flush()
 
+            #print(socket_buff)
             await websocket.send(socket_buff)
 
         except Exception as e:
