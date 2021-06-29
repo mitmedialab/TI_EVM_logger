@@ -18,6 +18,14 @@ It works with the following EVM boards:
 
 ## How?
 
+### Install
+
+You might need to run the following:
+
+    pip3 install pyserial crcmod tables websockets
+
+### Run
+
 Start the python script (with websocket server):
 
     ./evm_logger.py
