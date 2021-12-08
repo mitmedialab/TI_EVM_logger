@@ -1,5 +1,9 @@
 # TI_EVM_logger
 
+[Example](https://www.media.mit.edu/projects/metasense/overview/):
+
+
+[![](https://honnet.github.io/img/metasense.gif)](https://www.media.mit.edu/projects/metasense/overview/)
 
 ## What?
 
@@ -44,7 +48,7 @@ Note: you might need to tune some of register parameters for your own applicatio
 
     https://e2e.ti.com/support/sensors/f/1023/t/295036#Q40
 
-- 1st implementation:
+- Previous implementation:
 
     https://github.com/2n3906/ldc1614evm_logger
 
